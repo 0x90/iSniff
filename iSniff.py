@@ -1,134 +1,113 @@
 #!/usr/bin/env python
-# -*- encoding: utf-8 -*-
-#
-# Tiny WiFi iSniff for iDev
-#
-# Links:
-# http://blog.oneiroi.co.uk/hacking/mac/wifi-recon-using-osx-native-tools/
-#
-# sudo ifconfig en0 ether d4:33:a3:ed:f2:12
-# sudo ifconfig en1 Wi-Fi xx:xx:xx:xx:xx:xx
+# Tiny WiFi sniffer for Apple AirPort card.
+# Based on https://gist.githubusercontent.com/nevdull77/10605115/raw/a2c10a3fee579b1e64404ac1266ca24589e4d3f5/sniff.py
+# http://www.cqure.net/wp/2014/04/scapy-with-wifi-monitor-rfmon-mode-on-os-x/#more-553
+# This insight was included in airoscapy.py (http://www.thesprawl.org/projects/airoscapy/)
+
+from scapy.all import *
+from datetime import datetime
+from time import time
+from pprint import pprint
+from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 __author__ = '090h'
 __license__ = 'GPL'
 
-from sys import exit
-from os import geteuid, remove
-from glob import glob
-from subprocess import Popen
-from time import sleep
-from signal import SIGHUP
-from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
-from scapy.all import *
+PROBE_REQUEST_TYPE = 0
+PROBE_REQUEST_SUBTYPE = 4
 
-
-try:
-    from watchdog.observers import Observer
-    from watchdog.events import PatternMatchingEventHandler
-except ImportError:
-    print('Install watchdog with pip:\n\tpip install watchdog')
-    exit(0)
-
-
-class CapHandler(PatternMatchingEventHandler):
-
-    patterns = ["*.cap"]
-
-    def __init__(self, observer):
-        super(CapHandler, self).__init__()
-        self.observer = observer
-        self.cap = None
-        self.counter = 0
-
-    def on_created(self, event):
-        if not event.is_directory:
-        # if not event.is_directory and event.src_path.startswith('airportSniff'):
-            print("file created: %s" % event.src_path)
-            self.cap = event.src_path
-            self.observer.stop()
-
-    # def on_modified(self, event):
-    #     if not event.is_directory:
-    #         self.counter += 1
-    #         print("file modified: %s count: %i" % event.src_path, self.counter)
-
-
-class iSniff(object):
-
-    airport_path = "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport"
+class iHopper(object):
 
     def __init__(self):
-        self.observer = None
-        self.airport = None
-        self.cap = None
+        pass
+
+
+
+class iSniffer(object):
+
+
+    def __init__(self, iface='en1', whitelist=None, verbose=False):
+        # Replace this with your phone's MAC address
+        if not whitelist: whitelist = ['00:00:00:00:00:00', ]
+        self.iface = iface
+        self.whitelist = whitelist
+        self.verbose = verbose
+        self.aps = {}
+        self.clients = {}
+
+    # Probe requests from clients
+    def handle_probe(self, pkt):
+        if pkt.haslayer(Dot11ProbeReq) and '\x00' not in pkt[Dot11ProbeReq].info:
+            essid = pkt[Dot11ProbeReq].info
+        else:
+            essid = 'Hidden SSID'
+        client = pkt[Dot11].addr2
+
+        if client in self.whitelist or essid in self.whitelist:
+            #TODO: add logging
+            return
+
+        # New client
+        if client not in self.clients:
+            self.clients[client] = []
+            print('[!] New client:  %s ' % client)
+
+        if essid not in self.clients[client]:
+            self.clients[client].append(essid)
+            print('[+] New ProbeRequest: from %s to %s' % (client, essid))
+
+    def handle_beacon(self, pkt):
+        # Check to see if it's a hidden SSID
+        essid = pkt[Dot11Elt].info if '\x00' not in pkt[Dot11Elt].info and pkt[Dot11Elt].info != '' else 'Hidden SSID'
+        bssid = pkt[Dot11].addr3
+        client = pkt[Dot11].addr2
+
+        if client in self.whitelist or essid in self.whitelist or bssid in self.whitelist:
+            #TODO: add logging
+            return
+
+        try:
+            channel = int(ord(pkt[Dot11Elt:3].info))
+        except:
+            channel = 0
+
+        try:
+            extra = pkt.notdecoded
+            rssi = -(256-ord(extra[-4:-3]))
+        except:
+            rssi = -100
+            #print "No signal strength found"
+
+        p = pkt[Dot11Elt]
+
+        capability = pkt.sprintf("{Dot11Beacon:%Dot11Beacon.cap%}"
+                          "{Dot11ProbeResp:%Dot11ProbeResp.cap%}").split('+')
+        # print('capability = %s' % capability)
+
+        crypto = set()
+        while isinstance(p, Dot11Elt):
+            if p.ID == 48:
+                crypto.add("WPA2")
+            elif p.ID == 221 and p.info.startswith('\x00P\xf2\x01\x01\x00'):
+                crypto.add("WPA")
+            p = p.payload
+
+        if not crypto:
+            if 'privacy' in capability:
+                crypto.add("WEP")
+            else:
+                crypto.add("OPN")
+
+        # print "NEW AP: %r [%s], channed %d, %s" % (ssid, bssid, channel,' / '.join(crypto))
+        # print "Target: %s Source: %s SSID: %s RSSi: %d" % (pkt.addr3, pkt.addr2, pkt.getlayer(Dot11ProbeReq).info, rssi)
+        enc = '/'.join(crypto)
+        if bssid not in self.aps:
+            self.aps[bssid] = (channel, essid, bssid, enc, rssi)
+            print "{0:5}\t{1:20}\t{2:20}\t{3:5}\t{4:4}".format(channel, essid, bssid, enc, rssi)
+
 
     def pkt_handler(self, pkt):
-        print(hexdump(pkt))
-
-    def monitor(self, channel, sleep_time=10):
-        # Prepare filemon
-        self.observer = Observer()
-        fhandler = CapHandler(self.observer)
-        self.observer.schedule(fhandler, '/tmp', recursive=False)
-        self.observer.start()
-
-        # Run airpiort
-        self.airport = Popen([self.airport_path, "sniff", str(channel)], close_fds=True)
-        print('Waiting for airport to fill aircap')
-        sleep(sleep_time)
-        self.airport.send_signal(SIGHUP)
-
-        # Get .cap file path and airport PID
-        self.cap = fhandler.cap
-        print('File catched: %s airport PID: %i' % (self.cap, self.airport.pid))
-
-    def run(self, channel):
-        self.monitor(channel)
-
-        # sniff(offline=self.cap, prn=self.pkt_handler, lfilter=lambda x: x.haslayer(Dot11))
-        print('Starting sniffer...')
-        sniff(offline=self.cap, prn=self.pkt_handler, )
-
-    def stop(self):
-        print('Stopping')
-        if self.observer is not None:
-            self.observer.stop()
-
-        if self.airport is not None:
-            print('Killing airport PID: %i' % self.airport.pid)
-            self.airport.kill()
-
-    def clear_tmp(self):
-        print('Cleaning /tmp...')
-        for f in glob('/tmp/airportSniff*.cap'):
-            # print('Removing: %s' % f)
-            remove(f)
-
-
-
-if __name__ == "__main__":
-    parser = ArgumentParser(description='iSniff demo', formatter_class=ArgumentDefaultsHelpFormatter)
-    parser.add_argument('-c', '--channel', type=int, required=True, help='wifi channel')
-    parser.add_argument('-C', '--clear', action='store_true', default=False, help='Remove all /tmp/airportSniff*.cap ')
-    args = parser.parse_args()
-
-    if geteuid() != 0:
-        print("[-] Your have to be root to put your wireless in monitor mode!")
-        exit(0)
-
-    print "[*] Starting scan on channel %s" % args.channel
-    isniff = iSniff()
-
-    try:
-        isniff.run(args.channel)
-    except KeyboardInterrupt:
-        isniff.stop()
-    finally:
-        if args.clear:
-            isniff.clear_tmp()
-
-
- # wlan.fc.type == 0           Management frames
+        # wlan.fc.type == 0           Management frames
         # wlan.fc.type == 1           Control frames
         # wlan.fc.type == 2           Data frames
         # wlan.fc.type_subtype == 0   Association request
@@ -138,29 +117,68 @@ if __name__ == "__main__":
         # wlan.fc.type_subtype == 4   Probe request
         # wlan.fc.type_subtype == 5   Probe response
         # wlan.fc.type_subtype == 8   Beacon
+        #
         # if pkt.type == 0 and pkt.subtype == 8:
+        #     if '\x00' in pkt.info:
+        #         essid = ''
+        #     else:
+        #         essid = pkt.info
+        #     print "AP MAC: %s with SSID: %s " % (pkt.addr2, essid)
+        #
+        # if pkt.type == 0 and pkt.subtype == 4:
+        #     self.handle_probe(pkt)
+        #
+        # return
             #if pkt.addr2 not in ap_list :
             #ap_list.append(pkt.addr2)
-            # print "AP MAC: %s with SSID: %s " % (pkt.addr2, pkt.info)
+            #print "AP MAC: %s with SSID: %s " % (pkt.addr2, pkt.info)
+        #print('Type: %i Subtype: %i' % (pkt.type, pkt.subtype))
+        # print(pkt.summary)
+        # return
+
+        # Client ProbeReq
+        # if pkt.haslayer(Dot11ProbeReq):
+        if pkt.type == PROBE_REQUEST_TYPE and pkt.subtype == PROBE_REQUEST_SUBTYPE:
+            self.handle_probe(pkt)
+
+        # AP beacon or response
+        if pkt.haslayer(Dot11Beacon) or pkt.haslayer(Dot11ProbeResp):
+            self.handle_beacon(pkt)
+
+    def sniff(self, count=0):
+        '''
+        Sniff Beacon and Probe Requst/Response frames to extract AP info
+        :param count: packets to capture, 0 = loop
+        :return:
+        '''
+        print('Press Ctrl-C to stop sniffing.')
+        sniff(iface=self.iface,
+              prn=self.pkt_handler,
+              # lfilter=lambda p: p.haslayer(Dot11))
+              lfilter=lambda p: p.haslayer(Dot11Beacon) or p.haslayer(Dot11ProbeResp) or p.haslayer(Dot11ProbeReq))
+
+    def stat(self):
+        # Print results
+        print('\nAP list:')
+        pprint(self.aps)
+        print('Clients:')
+        pprint(self.clients)
 
 
-#!/usr/bin/python -tt
-import subprocess
-airport = '/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport'
+        # make_table(lambda l:"%%-%is" % l, lambda l:"%%-%is" % l, "", *args, **kargs)
+        #make_table(self.ap.items(), lambda l: str(l))
+        # lambda l: ",".join(['"%s"' % x for x in [self.ap[l]['ssid'], self.ap[l]['cli'], self.ap[l]['lastseen']]]))
+        # print(",".join(["ssid", "cli", "lastseen"]))
+        # for key in self.ap:
+        # print(",".join(['"%s"' % x for x in [self.ap[key]['ssid'], self.ap[key]['cli'], self.ap[key]['lastseen']]]))
 
-def getAirportInfo():
-  arguments = [airport,"--getinfo"]
-  execute = subprocess.Popen(arguments, stdout=subprocess.PIPE)
-  out, err = execute.communicate()
-  dict = {}
-  for line in out.split('\n'):
-    parse = line.split(': ')
-    try:
-      key = parse[0].strip()
-      value = parse[1]
-      dict[key] = value
-    except IndexError:
-      None
-  return dict
-airportInfo = getAirportInfo()
-print airportInfo['SSID']
+
+if __name__ == '__main__':
+    parser = ArgumentParser('iSniff', description='Tiny iSniff for RFMON under OS X',
+                            formatter_class=ArgumentDefaultsHelpFormatter)
+    parser.add_argument('-i', '--interface', default='en1', required=False, help='Interface to used')
+    args = parser.parse_args()
+
+    isniff = iSniffer(args.interface)
+    isniff.sniff()
+    isniff.stat()
