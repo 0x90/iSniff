@@ -2,11 +2,13 @@
 
 ## Installation
 
-How to install? Install Xcode and MacPorts first. After that run this command
+Install Xcode and MacPorts first. After that run this command
 
 ```
 curl -s https://raw.githubusercontent.com/0x90/iSniff/install.sh | sudo sh
 ```
+
+[Use brew?](http://www.cqure.net/wp/2014/04/scapy-with-wifi-monitor-rfmon-mode-on-os-x/)
 
 ## Usage
 
