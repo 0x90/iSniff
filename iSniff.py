@@ -16,13 +16,6 @@ __license__ = 'GPL'
 PROBE_REQUEST_TYPE = 0
 PROBE_REQUEST_SUBTYPE = 4
 
-class iHopper(object):
-
-    def __init__(self):
-        pass
-
-
-
 class iSniffer(object):
 
 
