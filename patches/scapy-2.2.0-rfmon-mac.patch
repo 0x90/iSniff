@@ -1,5 +1,5 @@
 --- scapy-2.1.0-rfmon/scapy/arch/pcapdnet.py	2009-09-23 10:27:36.000000000 -0400
-+++ scapy-2.1.0/scapy/arch/pcapdnet.py	2014-04-11 20:54:49.000000000 -0400
++++ scapy-2.2.0/scapy/arch/pcapdnet.py	2014-04-11 20:54:49.000000000 -0400
 @@ -52,7 +52,14 @@
              class _PcapWrapper_libpcap:
                  def __init__(self, *args, **kargs):

@@ -57,6 +57,9 @@ class iSniffer(object):
             print('[+] New ProbeRequest: from %s to %s' % (client, essid))
 
     def handle_beacon(self, pkt):
+        if not pkt.haslayer(Dot11Elt):
+            return
+
         # Check to see if it's a hidden SSID
         essid = pkt[Dot11Elt].info if '\x00' not in pkt[Dot11Elt].info and pkt[Dot11Elt].info != '' else 'Hidden SSID'
         bssid = pkt[Dot11].addr3
@@ -103,7 +106,7 @@ class iSniffer(object):
         enc = '/'.join(crypto)
         if bssid not in self.aps:
             self.aps[bssid] = (channel, essid, bssid, enc, rssi)
-            print "{0:5}\t{1:20}\t{2:20}\t{3:5}\t{4:4}".format(channel, essid, bssid, enc, rssi)
+            print "[+] New AP {0:5}\t{1:20}\t{2:20}\t{3:5}\t{4:4}".format(channel, essid, bssid, enc, rssi)
 
 
     def pkt_handler(self, pkt):
